@@ -1,7 +1,10 @@
 local pickers = require("telescope.pickers")
 local finders = require("telescope.finders")
 local conf = require("telescope.config").values
+local actions = require('telescope.actions')
+local actions_state = require('telescope.actions.state')
 
+local main_bufnr = vim.api.nvim_get_current_buf()
 
 -- All with `_` as local is also a keyword
 local hl_groups = {
@@ -10,7 +13,6 @@ local hl_groups = {
     _local = "TelescopeSpellErrorLocal",
     _caps = "TelescopeSpellErrorCap",
 }
-
 
 --- Get the cursor position in the buffer
 ---@return integer[] { row, col } The current cursor position (row: 1-based, col: 0-based)
@@ -81,39 +83,78 @@ local telescope_spell_errors = function(opts)
         return
     end
 
+    local main_win = vim.api.nvim_get_current_win()
+
     opts = opts or {}
+
+    -- We need to reference this twice, thus it's best served as its own function
+    local function make_entry_maker()
+        return function(entry)
+            local pos = string.format("%4d:%3d", entry.line_num, entry.col_num)
+            local type_and_pos = string.format("%-5s", string.upper(entry.error_type)) .. pos
+            local highlight_len = string.len(type_and_pos)
+            local highlight_group = hl_groups["_" .. entry.error_type]
+            local sep = "  ▏ "
+            local dispaly_str = type_and_pos .. sep .. entry.word
+            return {
+                value = entry,
+                display = function(_)
+                    return dispaly_str, { { { 0, highlight_len }, highlight_group } }
+                end,
+                ordinal = dispaly_str,
+                filename = entry.filename,
+                type = entry.error_type,
+                lnum = entry.line_num,
+                col = entry.col_num,
+            }
+        end
+    end
 
     local picker = pickers.new(opts, {
         prompt_title = "Spell Errors",
         finder = finders.new_table {
             results = get_spell_errors(),
-            entry_maker = function(entry)
-                local pos = string.format("%4d:%3d", entry.line_num, entry.col_num)
-                local type_and_pos = string.format("%-5s", string.upper(entry.error_type)) .. pos
-                local highlight_len = string.len(type_and_pos)
-                local highlight_group = hl_groups["_" .. entry.error_type]
-                local sep = "  ▏ "
-                local dispaly_str = type_and_pos .. sep .. entry.word
-                return {
-                    value = entry,
-                    display = function(_)
-                        return dispaly_str, { { { 0, highlight_len }, highlight_group } }
-                    end,
-                    ordinal = dispaly_str,
-                    filename = entry.filename,
-                    type = entry.error_type,
-                    lnum = entry.line_num,
-                    col = entry.col_num,
-                }
-            end
+            entry_maker = make_entry_maker(),
         },
         previewer = conf.qflist_previewer(opts),
         sorter = conf.prefilter_sorter {
             tag = "type",
             sorter = conf.generic_sorter(opts),
         },
-    })
+        attach_mappings = function(prompt_bufnr, map)
 
+            -- Auto-correct the selected entry with first suggestion
+            local function auto_correct()
+                local selection = actions_state.get_selected_entry()
+                local picker = actions_state.get_current_picker(prompt_bufnr)
+                local new_results
+                vim.api.nvim_win_call(main_win, function()
+                    vim.cmd("normal! m'")
+                    vim.api.nvim_win_set_cursor(0, {selection.value.line_num, selection.value.col_num})
+                    vim.cmd("normal! 1z=")
+                    new_results = get_spell_errors()
+                end)
+                picker:refresh(finders.new_table {
+                    results = new_results,
+                    entry_maker = make_entry_maker(),
+                }, { reset_prompt = true })
+            end
+
+            -- Keybindings
+            map('i', '<C-c>', auto_correct)
+            map('n', 'c', auto_correct)
+
+            -- Jump to the spell error when selected
+            actions.select_default:replace(function()
+                actions.close(prompt_bufnr)
+                local selection = actions_state.get_selected_entry()
+                vim.cmd("normal! m'")
+                vim.api.nvim_win_set_cursor(0, {selection.value.line_num, selection.value.col_num})
+                vim.cmd("normal! zz")
+            end)
+            return true
+        end,
+    })
     picker:find()
 end
 
