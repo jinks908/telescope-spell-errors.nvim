@@ -77,13 +77,16 @@ local function get_spell_errors()
 end
 
 
-local telescope_spell_errors = function(opts)
+-- Declared separately so the body can call itself to reopen the picker
+local telescope_spell_errors
+telescope_spell_errors = function(opts)
     if not vim.api.nvim_get_option_value("spell", {}) then
         vim.notify("Spell checking is not enabled in the current buffer. See `:h spell`", vim.log.levels.WARN)
         return
     end
 
     local main_win = vim.api.nvim_get_current_win()
+    local main_bufnr = vim.api.nvim_win_get_buf(main_win)
 
     opts = opts or {}
 
@@ -124,25 +127,89 @@ local telescope_spell_errors = function(opts)
         attach_mappings = function(prompt_bufnr, map)
 
             -- Auto-correct the selected entry with first suggestion
-            local function auto_correct()
+            local function auto_correct(op)
+                return function()
+                    local selection = actions_state.get_selected_entry()
+                    local picker = actions_state.get_current_picker(prompt_bufnr)
+                    local new_results
+
+                    -- Operations need to be applied to main window, not prompt/picker
+                    vim.api.nvim_win_call(main_win, function()
+                        local cmd
+                        if op == "auto" then
+                            -- Auto-correct the word with the first suggestion
+                            cmd = "normal! 1z="
+                        elseif op == "correct" then
+                            -- Mark word as correct
+                            cmd = "normal! zg"
+                        else
+                            -- Mark word as incorrect
+                            cmd = "normal! zw"
+                        end
+                        vim.cmd("normal! m'")
+                        vim.api.nvim_win_set_cursor(0, {selection.value.line_num, selection.value.col_num})
+                        vim.cmd(cmd)
+                        new_results = get_spell_errors()
+                    end)
+                    picker:refresh(finders.new_table {
+                        results = new_results,
+                        entry_maker = make_entry_maker(),
+                    }, { reset_prompt = true })
+                end
+            end
+
+            -- Open a nested picker with suggestions for the selected entry
+            local function open_suggestions()
                 local selection = actions_state.get_selected_entry()
-                local picker = actions_state.get_current_picker(prompt_bufnr)
-                local new_results
-                vim.api.nvim_win_call(main_win, function()
-                    vim.cmd("normal! m'")
-                    vim.api.nvim_win_set_cursor(0, {selection.value.line_num, selection.value.col_num})
-                    vim.cmd("normal! 1z=")
-                    new_results = get_spell_errors()
-                end)
-                picker:refresh(finders.new_table {
-                    results = new_results,
-                    entry_maker = make_entry_maker(),
-                }, { reset_prompt = true })
+                local word = selection.value.word
+                local line_num = selection.value.line_num
+                local col_num = selection.value.col_num
+
+                -- Get suggestions list programmatically (rather than `normal! z=`)
+                local suggestions = vim.fn.spellsuggest(word)
+                if vim.tbl_isempty(suggestions) then
+                    vim.notify("No suggestions for '" .. word .. "'", vim.log.levels.INFO)
+                    return
+                end
+
+                -- Nested picker that re-opens (not refreshes) the spell error picker after selection
+                pickers.new(opts, {
+                    prompt_title = "Suggestions: " .. word,
+                    finder = finders.new_table { results = suggestions },
+                    sorter = conf.generic_sorter(opts),
+                    attach_mappings = function(suggestion_bufnr)
+                        actions.select_default:replace(function()
+                            local choice = actions_state.get_selected_entry()[1]
+                            actions.close(suggestion_bufnr)
+
+                            local row = line_num - 1
+                            local start_col = col_num - 1
+                            vim.api.nvim_buf_set_text(
+                                main_bufnr, row, start_col, row, start_col + #word, { choice }
+                            )
+
+                            -- Reopen the spell error picker after the suggestion is applied
+                            vim.schedule(function()
+                                vim.api.nvim_set_current_win(main_win)
+                                -- Reopening (not refreshing) re-reads the spell errors,
+                                -- so the list comes back with the correction applied
+                                telescope_spell_errors(opts)
+                            end)
+                        end)
+                        return true
+                    end,
+                }):find()
             end
 
             -- Keybindings
-            map('i', '<C-c>', auto_correct)
-            map('n', 'c', auto_correct)
+            map('i', '<C-a>', auto_correct("auto"))
+            map('n', 'a', auto_correct("auto"))
+            map('i', '<C-c>', auto_correct("correct"))
+            map('n', 'c', auto_correct("correct"))
+            map('i', '<C-i>', auto_correct("incorrect"))
+            map('n', 'i', auto_correct("incorrect"))
+            map('i', '<C-s>', open_suggestions)
+            map('n', 's', open_suggestions)
 
             -- Jump to the spell error when selected
             actions.select_default:replace(function()
