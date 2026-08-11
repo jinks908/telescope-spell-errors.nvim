@@ -4,8 +4,6 @@ local conf = require("telescope.config").values
 local actions = require('telescope.actions')
 local actions_state = require('telescope.actions.state')
 
-local main_bufnr = vim.api.nvim_get_current_buf()
-
 -- All with `_` as local is also a keyword
 local hl_groups = {
     _bad = "TelescopeSpellErrorBad",
@@ -39,11 +37,6 @@ local function go_to_next_spell_error()
     vim.api.nvim_command("silent normal! ]s")
 end
 
-
--- Tried the approach of just checking each line with `vim.spell.check`,
---  but gave a lot more results that are not showing up in the buffer.
---  Also context would be missing
-
 ---@return table[] spellerrors
 local function get_spell_errors()
     local filename = vim.api.nvim_buf_get_name(0)
@@ -56,9 +49,24 @@ local function get_spell_errors()
     local first_pos = get_cursor_pos()
     local word, error_type
 
+    -- `]s` can fail to advance or fail to wrap (e.g. Treesitter `@nospell`
+    --  regions in markdown), so bound the walk by the buffer size instead of
+    --  relying solely on returning to `first_pos`
+    local max_iterations = vim.api.nvim_buf_line_count(0) * 10
     local pos = first_pos
-    repeat
+    local seen = {}
+    for _ = 1, max_iterations do
+        local key = pos[1] .. ":" .. pos[2]
+        if seen[key] then
+            break
+        end
+        seen[key] = true
+
         word, error_type = unpack(vim.fn.spellbadword())
+        if word == "" then
+            break
+        end
+
         table.insert(spellerrors, {
             filename = filename,
             word = word,
@@ -69,13 +77,12 @@ local function get_spell_errors()
 
         go_to_next_spell_error()
         pos = get_cursor_pos()
-    until pos[1] == first_pos[1] and pos[2] == first_pos[2]
+    end
 
     set_cursor_position(original_pos)
 
     return spellerrors
 end
-
 
 -- Declared separately so the body can call itself to reopen the picker
 local telescope_spell_errors
