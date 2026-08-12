@@ -165,6 +165,40 @@ telescope_spell_errors = function(opts)
                 end
             end
 
+            --- @param type string Spell error type: "bad", "rare", "local", "caps"
+            --- @return nil
+            local function fix_all_errors(type)
+                return function()
+                    local picker = actions_state.get_current_picker(prompt_bufnr)
+                    local new_results
+
+                    -- Operations need to be applied to main window, not prompt/picker
+                    vim.api.nvim_win_call(main_win, function()
+                        local results = get_spell_errors()
+                        local filtered_results = results
+                        -- Filter the results to only include the specified type
+                        filtered_results = vim.tbl_filter(function(error)
+                            return error.error_type == type
+                        end, results)
+
+                        -- Apply the operation to each error of the specified type
+                        for _, error in ipairs(filtered_results) do
+                            vim.api.nvim_win_set_cursor(0, {error.line_num, error.col_num})
+                            vim.cmd("normal! 1z=")
+                        end
+                        -- Confirmation
+                        vim.notify("All '" .. type .. "' errors fixed", vim.log.levels.INFO)
+
+                        -- Refresh the picker with the updated spell errors
+                        new_results = get_spell_errors()
+                    end)
+                    picker:refresh(finders.new_table {
+                        results = new_results,
+                        entry_maker = make_entry_maker(),
+                    }, { reset_prompt = true })
+                end
+            end
+
             -- Open a nested picker with suggestions for the selected entry
             local function open_suggestions()
                 local selection = actions_state.get_selected_entry()
@@ -217,6 +251,8 @@ telescope_spell_errors = function(opts)
             map('n', 'i', auto_correct("incorrect"))
             map('i', '<C-s>', open_suggestions)
             map('n', 's', open_suggestions)
+            map('i', '<C-f>', fix_all_errors("bad"))
+            map('n', 'f', fix_all_errors("bad"))
 
             -- Jump to the spell error when selected
             actions.select_default:replace(function()
@@ -231,7 +267,6 @@ telescope_spell_errors = function(opts)
     })
     picker:find()
 end
-
 
 return require("telescope").register_extension {
     setup = function(ext_config, config)
