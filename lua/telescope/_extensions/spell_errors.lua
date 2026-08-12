@@ -25,6 +25,7 @@ local function set_cursor_position(pos)
 end
 
 --- Jump to the first spell error
+--- @return nil
 local function go_to_first_spell_error()
     -- Needs to be a synchronous call, so not `vim.api.nvim_feedkeys` or
     --  `vim.api.nvim_input` not possible,
@@ -33,10 +34,12 @@ local function go_to_first_spell_error()
 end
 
 --- Jump to the next spell error
+--- @return nil
 local function go_to_next_spell_error()
     vim.api.nvim_command("silent normal! ]s")
 end
 
+--- Get all spell errors in the current buffer
 ---@return table[] spellerrors
 local function get_spell_errors()
     local filename = vim.api.nvim_buf_get_name(0)
@@ -86,6 +89,9 @@ end
 
 -- Declared separately so the body can call itself to reopen the picker
 local telescope_spell_errors
+--- Open a Telescope picker with all spell errors in the current buffer
+--- @param opts table Telescope options
+--- @return nil
 telescope_spell_errors = function(opts)
     if not vim.api.nvim_get_option_value("spell", {}) then
         vim.notify("Spell checking is not enabled in the current buffer. See `:h spell`", vim.log.levels.WARN)
@@ -97,7 +103,10 @@ telescope_spell_errors = function(opts)
 
     opts = opts or {}
 
-    -- We need to reference this twice, thus it's best served as its own function
+    --- Create an entry maker for the spell errors
+    --- @return function(entry) Entry maker function for Telescope
+        --- @param entry table Spell error entry with fields: filename, word, error_type, line_num, col_num
+        --- @return table Telescope entry with fields: value, display, ordinal, filename, type
     local function make_entry_maker()
         return function(entry)
             local pos = string.format("%4d:%3d", entry.line_num, entry.col_num)
@@ -133,7 +142,9 @@ telescope_spell_errors = function(opts)
         },
         attach_mappings = function(prompt_bufnr, map)
 
-            -- Auto-correct the selected entry with first suggestion
+            --- Fix the selected entry w/ first suggestion
+            --- @param op string Operation: "correct", "good", "wrong"
+            --- @return nil
             local function auto_correct(op)
                 return function()
                     local selection = actions_state.get_selected_entry()
@@ -165,7 +176,8 @@ telescope_spell_errors = function(opts)
                 end
             end
 
-            --- @param type string Spell error type: "bad", "rare", "local", "caps"
+            --- Fix all spell errors of the specified type in the buffer
+            --- @param type string Spell error type: "bad", "rare", "local", "caps", "buffer" (all types)
             --- @return nil
             local function fix_all_errors(type)
                 return function()
@@ -208,7 +220,8 @@ telescope_spell_errors = function(opts)
                 end
             end
 
-            -- Open a nested picker with suggestions for the selected entry
+            --- Open a nested picker with suggestions for the selected entry
+            --- @return nil
             local function open_suggestions()
                 local selection = actions_state.get_selected_entry()
                 local word = selection.value.word
@@ -280,6 +293,9 @@ telescope_spell_errors = function(opts)
 end
 
 return require("telescope").register_extension {
+    --- Setup function for the extension
+    --- @param ext_config table Extension configuration
+    --- @param config table Telescope configuration
     setup = function(ext_config, config)
         -- Get highlight groups
         local spell_bad = vim.api.nvim_get_hl(0, { name = "SpellBad" })
