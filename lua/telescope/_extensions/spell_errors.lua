@@ -143,14 +143,14 @@ telescope_spell_errors = function(opts)
                     -- Operations need to be applied to main window, not prompt/picker
                     vim.api.nvim_win_call(main_win, function()
                         local cmd
-                        if op == "auto" then
+                        if op == "correct" then
                             -- Auto-correct the word with the first suggestion
                             cmd = "normal! 1z="
-                        elseif op == "correct" then
-                            -- Mark word as correct
+                        elseif op == "good" then
+                            -- Mark word as good
                             cmd = "normal! zg"
                         else
-                            -- Mark word as incorrect
+                            -- Mark word as wrong
                             cmd = "normal! zw"
                         end
                         vim.cmd("normal! m'")
@@ -169,25 +169,34 @@ telescope_spell_errors = function(opts)
             --- @return nil
             local function fix_all_errors(type)
                 return function()
+                    local selection = actions_state.get_selected_entry()
                     local picker = actions_state.get_current_picker(prompt_bufnr)
+                    local type = type or selection.value.error_type
                     local new_results
 
                     -- Operations need to be applied to main window, not prompt/picker
                     vim.api.nvim_win_call(main_win, function()
                         local results = get_spell_errors()
-                        local filtered_results = results
-                        -- Filter the results to only include the specified type
-                        filtered_results = vim.tbl_filter(function(error)
-                            return error.error_type == type
-                        end, results)
 
+                        local filtered_results
+                        if type == "buffer" then
+                            -- No filtering, apply to all errors in buffer
+                            filtered_results = results
+                        else
+                            -- Filter the results to only include the specified type
+                            filtered_results = vim.tbl_filter(function(error)
+                                return error.error_type == type
+                            end, results)
+                        end
+
+                        local count = #filtered_results
                         -- Apply the operation to each error of the specified type
                         for _, error in ipairs(filtered_results) do
                             vim.api.nvim_win_set_cursor(0, {error.line_num, error.col_num})
                             vim.cmd("normal! 1z=")
                         end
                         -- Confirmation
-                        vim.notify("All '" .. type .. "' errors fixed", vim.log.levels.INFO)
+                        vim.notify("Fixed all " .. tostring(count) .. " '" .. type:gsub("^%l", string.upper) .. "' errors", vim.log.levels.INFO)
 
                         -- Refresh the picker with the updated spell errors
                         new_results = get_spell_errors()
@@ -243,16 +252,18 @@ telescope_spell_errors = function(opts)
             end
 
             -- Keybindings
-            map('i', '<C-a>', auto_correct("auto"))
-            map('n', 'a', auto_correct("auto"))
             map('i', '<C-c>', auto_correct("correct"))
             map('n', 'c', auto_correct("correct"))
-            map('i', '<C-i>', auto_correct("incorrect"))
-            map('n', 'i', auto_correct("incorrect"))
+            map('i', '<C-g>', auto_correct("good"))
+            map('n', 'g', auto_correct("good"))
+            map('i', '<C-w>', auto_correct("wrong"))
+            map('n', 'w', auto_correct("wrong"))
             map('i', '<C-s>', open_suggestions)
             map('n', 's', open_suggestions)
-            map('i', '<C-f>', fix_all_errors("bad"))
-            map('n', 'f', fix_all_errors("bad"))
+            map('i', '<C-f>', fix_all_errors())
+            map('n', 'f', fix_all_errors())
+            map('i', '<C-a>', fix_all_errors("buffer"))
+            map('n', 'a', fix_all_errors("buffer"))
 
             -- Jump to the spell error when selected
             actions.select_default:replace(function()
